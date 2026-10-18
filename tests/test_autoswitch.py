@@ -497,6 +497,50 @@ class TestDecisionTable:
         assert switch.trigger == "failover"
         assert harness.active_number() == 2
 
+    def test_unhealthy_count_survives_a_fresh_engine_per_tick(self, harness):
+        # `auto --once` builds a new engine every invocation.
+        usage = {"1": None, "2": _usage(10), "3": _usage(50)}
+        assert harness.tick_with_usage(usage) is TickOutcome.NO_ACTION
+        assert harness.state()["unhealthyTicks"] == 1
+        harness.engine = harness._make_engine()
+        assert harness.tick_with_usage(usage) is TickOutcome.NO_ACTION
+        harness.engine = harness._make_engine()
+        assert harness.tick_with_usage(usage) is TickOutcome.SWITCHED
+        assert harness.active_number() == 2
+
+    def test_idle_hold_clock_survives_a_fresh_engine_per_tick(self, harness):
+        held = {"1": USAGE_TOKEN_EXPIRED, "2": _usage(10), "3": _usage(20)}
+        harness.tick_with_usage(held)
+        harness.clock.advance(IDLE_HOLD_MAX_S + 1)
+        harness.engine = harness._make_engine()
+        assert harness.tick_with_usage(held) is TickOutcome.NO_ACTION
+        assert harness.state()["unhealthyTicks"] == 1
+        assert not any(
+            isinstance(e, NoSwitchEvent) and e.reason == "active-idle"
+            for e in harness.events[-2:]
+        )
+
+    def test_persisted_count_ignored_for_another_account_or_stale_tick(self, harness):
+        unknown = {"1": None, "2": _usage(10), "3": _usage(50)}
+        harness.tick_with_usage(unknown)
+        harness.tick_with_usage(unknown)
+        assert harness.state()["unhealthyTicks"] == 2
+        harness.clock.advance(2 * IDLE_HOLD_MAX_S + 1)
+        harness.engine = harness._make_engine()
+        assert harness.tick_with_usage(unknown) is TickOutcome.NO_ACTION
+        assert harness.state()["unhealthyTicks"] == 1
+        harness.engine._mutate_state(lambda s: s.update(healthAccount="2"))
+        harness.engine = harness._make_engine()
+        assert harness.tick_with_usage(unknown) is TickOutcome.NO_ACTION
+        assert harness.state()["unhealthyTicks"] == 1
+
+    def test_healthy_reading_clears_persisted_counters(self, harness):
+        harness.tick_with_usage({"1": None, "2": _usage(10), "3": _usage(10)})
+        harness.tick_with_usage({"1": _usage(50), "2": _usage(10), "3": _usage(10)})
+        state = harness.state()
+        assert "unhealthyTicks" not in state
+        assert "idleHoldSince" not in state
+
     def test_known_active_usage_resets_unhealthy_counter(self, harness):
         unknown = {"1": None, "2": _usage(10), "3": _usage(10)}
         healthy = {"1": _usage(50), "2": _usage(10), "3": _usage(10)}
