@@ -760,6 +760,7 @@ class AutoSwitchEngine:
         self._wake = threading.Event()
         self._unhealthy_ticks = 0
         self._health_account: str | None = None
+        self._health_loaded = False
         # Both set per tick: a known-reset sleep target, and whether a BLOCKED
         # outcome is static enough (truly exhausted / no candidates) to wait
         # longer than the normal interval.
@@ -1059,12 +1060,14 @@ class AutoSwitchEngine:
         )
 
     def _load_health_counters(self, state: dict, current: str) -> None:
-        """Seed the unreadable-active counters from the state file.
+        """Seed the unreadable-active counters from the state file, once.
 
         They are persisted so a fresh engine per tick (``auto --once``) keeps
         counting toward failover instead of restarting at zero. Counters left
         by another account, or by a tick longer ago than twice the idle-hold cap,
-        are dropped.
+        are dropped. After this first load the in-memory values are authoritative,
+        so dry-run (which never persists) and long gaps between loop ticks keep
+        their progress.
         """
         ticks = state.get("unhealthyTicks")
         since = state.get("idleHoldSince")
@@ -1133,8 +1136,9 @@ class AutoSwitchEngine:
 
         current = self.switcher.current_account_number()
         self._health_account = current
-        if current is not None:
+        if current is not None and not self._health_loaded:
             self._load_health_counters(state, current)
+            self._health_loaded = True
         if current is None:
             self._emit(
                 PollEvent(

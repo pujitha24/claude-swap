@@ -534,6 +534,34 @@ class TestDecisionTable:
         assert harness.tick_with_usage(unknown) is TickOutcome.NO_ACTION
         assert harness.state()["unhealthyTicks"] == 1
 
+    def test_dry_run_loop_reaches_would_failover_on_unknown_usage(self, harness):
+        harness.engine = harness._make_engine(dry_run=True)
+        unknown = {"1": None, "2": _usage(10), "3": _usage(50)}
+        for _ in range(2):
+            assert harness.tick_with_usage(unknown) is TickOutcome.NO_ACTION
+        assert harness.tick_with_usage(unknown) is TickOutcome.SWITCHED
+        assert harness.active_number() == 1
+        assert "unhealthyTicks" not in harness.state()
+
+    def test_dry_run_idle_hold_clock_survives_ticks(self, harness):
+        harness.engine = harness._make_engine(dry_run=True)
+        held = {"1": USAGE_TOKEN_EXPIRED, "2": _usage(10), "3": _usage(20)}
+        harness.tick_with_usage(held)
+        harness.clock.advance(IDLE_HOLD_MAX_S + 1)
+        assert harness.tick_with_usage(held) is TickOutcome.NO_ACTION
+        assert not any(
+            isinstance(e, NoSwitchEvent) and e.reason == "active-idle"
+            for e in harness.events[-2:]
+        )
+
+    def test_loop_progress_survives_a_long_gap_between_ticks(self, harness):
+        unknown = {"1": None, "2": _usage(10), "3": _usage(50)}
+        harness.tick_with_usage(unknown)
+        harness.tick_with_usage(unknown)
+        harness.clock.advance(3 * IDLE_HOLD_MAX_S)
+        assert harness.tick_with_usage(unknown) is TickOutcome.SWITCHED
+        assert harness.active_number() == 2
+
     def test_healthy_reading_clears_persisted_counters(self, harness):
         harness.tick_with_usage({"1": None, "2": _usage(10), "3": _usage(10)})
         harness.tick_with_usage({"1": _usage(50), "2": _usage(10), "3": _usage(10)})
