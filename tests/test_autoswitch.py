@@ -534,6 +534,32 @@ class TestDecisionTable:
         assert harness.tick_with_usage(unknown) is TickOutcome.NO_ACTION
         assert harness.state()["unhealthyTicks"] == 1
 
+    def test_count_built_on_one_account_is_not_saved_under_the_next(self, harness):
+        unknown = {"1": None, "2": None, "3": _usage(50)}
+        harness.tick_with_usage(unknown)
+        harness.tick_with_usage(unknown)
+        assert harness.state()["unhealthyTicks"] == 2
+        # Same engine, active account changes from 1 to 2 (e.g. by hand).
+        harness.make_live("b@example.com", 2)
+        assert harness.tick_with_usage(unknown) is TickOutcome.NO_ACTION
+        state = harness.state()
+        assert state["healthAccount"] == "2"
+        assert state["unhealthyTicks"] == 1
+        harness.engine = harness._make_engine()
+        assert harness.tick_with_usage(unknown) is TickOutcome.NO_ACTION
+        assert harness.state()["unhealthyTicks"] == 2
+
+    def test_no_active_tick_keeps_the_health_context(self, harness):
+        unknown = {"1": None, "2": _usage(10), "3": _usage(50)}
+        harness.tick_with_usage(unknown)
+        harness.tick_with_usage(unknown)
+        with patch.object(
+            harness.switcher, "current_account_number", return_value=None
+        ):
+            harness.tick_with_usage(unknown)
+        assert harness.engine._health_account == "1"
+        assert harness.tick_with_usage(unknown) is TickOutcome.SWITCHED
+
     def test_dry_run_loop_reaches_would_failover_on_unknown_usage(self, harness):
         harness.engine = harness._make_engine(dry_run=True)
         unknown = {"1": None, "2": _usage(10), "3": _usage(50)}
